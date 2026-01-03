@@ -52,7 +52,7 @@ enum SvgWriteError {
 fn write_svg(svg: &SVG) -> Result<String, SvgWriteError> {
     let mut buffer = Vec::new();
     svg::write(&mut buffer, svg)?;
-    
+
     Ok(String::from_utf8(buffer)?)
 }
 
@@ -71,11 +71,13 @@ pub fn show_plate(ishihara_args: ReadSignal<IshiharaArgs>) -> impl IntoView {
                         SvgWriteError::FromUtf8Error(error) => format!("FromUtf8Error: {}", error.to_string()),
                     };
 
-                    view! {
-                        <div class="alert alert-danger" role="alert">
+                    // I can't figure out how you're supposed to do this with view!, so im using a string.
+                    // Also an error class needs to be added to the stylesheet.
+                    format!("
+                        <div class=\"error\">
                             {message}
                         </div>
-                    }.to_html()
+                    ")
                 }
             };
 
