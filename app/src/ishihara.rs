@@ -1,11 +1,9 @@
-use crate::color::{hex_color, Color};
+use crate::color::Color;
 use crate::ishihara_form::IshiharaArgs;
 use crate::ishihara_form::IshiharaInput;
 use crate::point2d::Point2D;
-use image::imageops::FilterType::Lanczos3;
-use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut};
-use leptos::html::Canvas;
+use image::{DynamicImage, Rgba, RgbaImage};
+use leptos::html::Div;
 use leptos::prelude::*;
 use rand::{Rng, RngCore};
 use rand::distr::uniform::Uniform;
@@ -13,11 +11,12 @@ use rand::distr::Distribution;
 use rand::rngs::ThreadRng;
 use rand::seq::IndexedRandom;
 use rusttype::{Font, Rect, Scale, point};
+use svg::Document;
+use svg::node::element::SVG;
+use thiserror::Error;
 use std::{f64, fmt};
 use strum::EnumIter;
 use strum::EnumString;
-use wasm_bindgen::{Clamped, JsCast};
-use web_sys::{CanvasRenderingContext2d, ImageData};
 
 type Point2d = Point2D<i32>;
 
@@ -42,31 +41,48 @@ impl fmt::Display for Circle {
 
 const FONT_SCALE: f32 = 256.0;
 
+#[derive(Error, Debug)]
+enum SvgWriteError {
+    #[error("Io Error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("FromUtf8Error: {0}")]
+    FromUtf8Error(#[from] std::string::FromUtf8Error)
+}
+
+fn write_svg(svg: &SVG) -> Result<String, SvgWriteError> {
+    let mut buffer = Vec::new();
+    svg::write(&mut buffer, svg)?;
+    
+    Ok(String::from_utf8(buffer)?)
+}
+
 #[component]
 pub fn show_plate(ishihara_args: ReadSignal<IshiharaArgs>) -> impl IntoView {
-    let canvas_element: NodeRef<Canvas> = NodeRef::new();
+    let svg: NodeRef<Div> = NodeRef::new();
     Effect::new(move |_| {
-        if let Some(canvas) = canvas_element.get() {
+        if let Some(svg) = svg.get() {
             let args: IshiharaArgs = ishihara_args.get();
             let plate = generate_plate(&args.text, args.blindness);
-            let image = ImageData::new_with_u8_clamped_array_and_sh(
-                Clamped(plate.as_raw()),
-                plate.width(),
-                plate.height(),
-            );
+            let html = match write_svg(&plate) {
+                Ok(html) => html,
+                Err(err) => {
+                    let message = match err {
+                        SvgWriteError::IoError(error) => format!("Io Error: {}", error.to_string()),
+                        SvgWriteError::FromUtf8Error(error) => format!("FromUtf8Error: {}", error.to_string()),
+                    };
 
-            canvas.set_width(plate.width());
-            canvas.set_height(plate.height());
-            let ctx = canvas
-                .get_context("2d")
-                .unwrap()
-                .unwrap()
-                .dyn_into::<CanvasRenderingContext2d>()
-                .unwrap();
-            ctx.put_image_data(&image.unwrap(), 0.0, 0.0).unwrap();
+                    view! {
+                        <div class="alert alert-danger" role="alert">
+                            {message}
+                        </div>
+                    }.to_html()
+                }
+            };
+
+            svg.set_inner_html(&html);
         }
     });
-    view! { <canvas node_ref={canvas_element} /> }
+    view! { <div node_ref={svg}></div> }
 }
 
 #[component]
@@ -101,41 +117,33 @@ pub fn ishihara_plate() -> impl IntoView {
     }
 }
 
-fn get_color(color: IshiharaColor, blindness: Blindness, rng: &mut ThreadRng) -> Color {
+fn get_color(color: IshiharaColor, blindness: Blindness, rng: &mut ThreadRng) -> &str {
     match (color, blindness) {
-        (IshiharaColor::Inside, Blindness::Demonstration) => hex_color("#f0712a").unwrap().1,
-        (IshiharaColor::Outside, Blindness::Demonstration) => hex_color("#2aa790").unwrap().1,
+        (IshiharaColor::Inside, Blindness::Demonstration) => "#f0712a",
+        (IshiharaColor::Outside, Blindness::Demonstration) => "#2aa790",
         //Red, Red, Orange, Yellow, Light Red, Light Red, Tan
         (IshiharaColor::Inside, Blindness::RedGreen) => {
-            hex_color(
-                [
-                    "#cf5f47", "#cf5f47", "#fd9500", "#ffd500", "#ee8568", "#ee8568", "#eebd7a",
-                ]
-                .choose(rng)
-                .unwrap(),
-            )
+            [
+                "#cf5f47", "#cf5f47", "#fd9500", "#ffd500", "#ee8568", "#ee8568", "#eebd7a",
+            ]
+            .choose(rng)
             .unwrap()
-            .1
+            
         }
         //Dark Green, Green, Light Green
         (IshiharaColor::Outside, Blindness::RedGreen) => {
-            hex_color(["#5a8a50", "#a2ab5a", "#c9cc7d"].choose(rng).unwrap())
-                .unwrap()
-                .1
+            ["#5a8a50", "#a2ab5a", "#c9cc7d"].choose(rng).unwrap()
+                
         }
         (IshiharaColor::Inside, Blindness::BlueYellow) => {
-            hex_color(["#0f3179", "#0270bf", "#696983"].choose(rng).unwrap())
-                .unwrap()
-                .1
+            ["#0f3179", "#0270bf", "#696983"].choose(rng).unwrap()
+                
         }
         (IshiharaColor::Outside, Blindness::BlueYellow) => {
-            hex_color(
-                ["#9e6e0c", "#cb850c", "#cb850c", "#ad8b10"]
-                    .choose(rng)
-                    .unwrap(),
-            )
-            .unwrap()
-            .1
+            ["#9e6e0c", "#cb850c", "#cb850c", "#ad8b10"]
+                .choose(rng)
+                .unwrap()
+            
         }
     }
 }
@@ -156,22 +164,6 @@ impl Circle {
         } else {
             self.ishihara_color = Some(IshiharaColor::Outside);
         }
-    }
-
-    fn draw(&self, image: &mut RgbaImage, upscaling_factor: u32, rng: &mut rand::rngs::ThreadRng, blindness: Blindness) {
-        let upscaling_factor = upscaling_factor as i32;
-
-        let color = match &self.ishihara_color {
-            Some(color) => get_color(*color, blindness, rng),
-            None => hex_color("#ffffff").unwrap().1,
-        };
-
-        draw_filled_circle_mut(
-            image,
-            (self.center.x * upscaling_factor, self.center.y * upscaling_factor),
-            self.radius as i32 * upscaling_factor,
-            Rgba([color.red, color.green, color.blue, 255]),
-        );
     }
 }
 
@@ -231,11 +223,10 @@ fn render_text(text: &str) -> RgbaImage {
     image
 }
 
-pub fn generate_plate(text: &str, blindness: Blindness) -> RgbaImage {
-    const AA_FACTOR: u32 = 2;
+pub fn generate_plate(text: &str, blindness: Blindness) -> Document {
     log::info!("Generating Plate: {}", text);
     // Get an image buffer from rendering the text
-    let mut image = render_text(text);
+    let image = render_text(text);
     let mut rng = rand::rng();
 
     // Create circles based based on the image buffer's dimensions
@@ -249,29 +240,33 @@ pub fn generate_plate(text: &str, blindness: Blindness) -> RgbaImage {
         .iter_mut()
         .for_each(|circle| circle.assign_colors(&image));
 
-    // Erase the text on the image buffer
-    draw_filled_rect_mut(
-        &mut image,
-        imageproc::rect::Rect::at(0, 0).of_size(x, y),
-        Rgba([255, 255, 255, 255]),
-    );
+    let background = svg::node::element::Rectangle::new()
+        .set("width", "100%")
+        .set("height", "100%")
+        .set("fill", "white");
 
-    // Create new buffer to draw upscaled circles
-    let mut image = ImageBuffer::new(x * AA_FACTOR, y * AA_FACTOR);
-    draw_filled_rect_mut(
-        &mut image,
-        imageproc::rect::Rect::at(0, 0).of_size(x * AA_FACTOR, y * AA_FACTOR),
-        Rgba([255, 255, 255, 255]),
-    );
+    let mut document = Document::new()
+        .set("width", x)
+        .set("height", y)
+        .set("viewBox", (0, 0, x, y))
+        .add(background);
 
-    // Draw Circles
-    circles
-        .iter()
-        .for_each(|circle| circle.draw(&mut image, AA_FACTOR, &mut rng, blindness));
+    for circle in circles {
+        let color = match &circle.ishihara_color {
+            Some(color) => get_color(*color, blindness, &mut rng),
+            None => "#ffffff",
+        };
 
-    // Shrink image to original size
-    // Supposedly Lanczos3 produces good image quality when downscaling.
-    image::imageops::resize(&image, x, y, Lanczos3)
+        let circle = svg::node::element::Circle::new()
+            .set("cx", circle.center.x)
+            .set("cy", circle.center.y)
+            .set("r", circle.radius)
+            .set("fill", color);
+
+        document = document.add(circle);
+    }
+
+    document
 }
 
 struct CircleGrid {
